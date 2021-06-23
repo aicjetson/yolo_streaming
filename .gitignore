@@ -1,0 +1,6 @@
+__pycache__
+tiny_yolov2/
+*.jpg
+*.trt
+*.gz
+*.names
