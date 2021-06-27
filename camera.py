@@ -27,14 +27,14 @@ class Camera(Singleton):
         self.act_height = self.height
         self.frame_info = "Frame:%dx%d" % (self.act_width, self.act_height)
 
-        # Download the label data
+        # ラベルのデータダウンロード
         self.categories = download_label()
 
-        # Configure the post-processing
+        # YOLO物体検出結果の後処理のパラメータを指定 
         self.postprocessor_args = {
-            # YOLO masks (Tiny YOLO v2 has only single scale.)
+            # YOLO v2 マスク
             "yolo_masks": [(0, 1, 2, 3, 4)],
-            # YOLO anchors
+            # YOLOv2 アンカーボックスの情報
             "yolo_anchors": [
                 (1.08, 1.19),
                 (3.42, 4.41),
@@ -42,21 +42,24 @@ class Camera(Singleton):
                 (9.42, 5.11),
                 (16.62, 10.52),
             ],
-            # Threshold of object confidence score (between 0 and 1)
+            # 物体だと判断するスコア基準
             "obj_threshold": 0.6,
-            # Threshold of NMS algorithm (between 0 and 1)
+            # 非最大値抑制に用いる閾値
             "nms_threshold": 0.3,
-            # Input image resolution
+            # 入寮画像解像度
             "yolo_input_resolution": INPUT_RES,
-            # Number of object classes
+            # 検出対象になる物体カテゴリの数
             "num_categories": len(self.categories),
         }
         self.postprocessor = PostprocessYOLO(**self.postprocessor_args)
 
-        # Image shape expected by the post-processing
+        # 後処理に入力するデータの形
         self.output_shapes = [(1, 125, 13, 13)]
+
+        # ONNXモデルをダウンロード
         self.onnx_file_path = download_model()
 
+        # ローカルに保存するTensor RT Planファイル名前を指定
         self.engine_file_path = "model.trt"
 
         self.time_list = np.zeros(10)
@@ -65,46 +68,43 @@ class Camera(Singleton):
         self.video.release()
 
     def get_frame(self):
+        # read()は、二つの値を返すので、success, imageの2つ変数
+        # OpencVはデフォルトでは raw imagesなので JPEGに変換
+        # メモリ上に格納したい時はimencodeを使用
         success, image = self.video.read()
         ret, frame = cv2.imencode(".jpg", image)
         return frame
 
-        # read()は、二つの値を返すので、success, imageの2つ変数で受けています。
-        # OpencVはデフォルトでは raw imagesなので JPEGに変換
-        # ファイルに保存する場合はimwriteを使用、メモリ上に格納したい時はimencodeを使用
-        # cv2.imencode() は numpy.ndarray() を返すので .tobytes() で bytes 型に変換
-
     def get_detection(
         self, inputs, outputs, bindings, stream, fps, frame_count, context
     ):
-        # Get the frame start time for FPS calculation
 
-        # Capture a frame
+        # カメラからフレームキャプチャ
         ret, img = self.video.read()
 
-        # Reshape the capture image for Tiny YOLO v2
+        # Tiny YOLO v2入力にあわせてフレームを変換
         rs_img = cv2.resize(img, INPUT_RES)
         rs_img = cv2.cvtColor(rs_img, cv2.COLOR_BGRA2RGB)
         src_img = reshape_image(rs_img)
 
-        # Execute an inference in TensorRT
+        # TensorRTを使って推論実行する
         inputs[0].host = src_img
         trt_outputs = common.do_inference(
             context, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream
         )
 
-        # Reshape the network output for the post-processing
+        # 後処理用に出力データをネットワークの出力データ形状を変換する．
         trt_outputs = [
             output.reshape(shape)
             for output, shape in zip(trt_outputs, self.output_shapes)
         ]
 
-        # Calculates the bounding boxes
+        # 後処理を実行してBBOXを計算する．
         boxes, classes, scores = self.postprocessor.process(
             trt_outputs, (self.act_width, self.act_height)
         )
 
-        # Draw the bounding boxes
+        # BBOXを画像に描画する．
         if boxes is not None:
             draw_bboxes(img, boxes, scores, classes, self.categories)
         if frame_count > 10:
